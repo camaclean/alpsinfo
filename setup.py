@@ -73,5 +73,5 @@ Get a dictionary of ALPS info about the currently running aprun. Usage:
 
 import alpsinfo, pprint
 pprint.pprint(alpsinfo.info())
-'''
+''',
        ext_modules = [alpsinfo])

@@ -37,28 +37,71 @@ extern int         alps_get_appinfo_ver3_err(uint64_t apid, appInfo_t *appinfo,
                        cmdDetail_t **cmdDetail, placeNodeList_ver3_t **places,
                        char **errMsg, int *err);
 
-static PyObject *
-alpsinfo_info(PyObject *self, PyObject *noargs) {
-    appInfo_t appinfo;
-    cmdDetail_t *cmd_details;
-    placeNodeList_ver3_t *placement_details;
-    char *err_msg;
-    int err;
 
-    uint64_t our_apid = get_this_apid();
-    
+static appInfo_t appinfo;
+static cmdDetail_t *cmd_details;
+static placeNodeList_ver3_t *placement_details;
+static uint64_t our_apid = 0;
+static char *err_msg;
+static int err;
+
+static PyObject *
+alpsinfo_apid(PyObject *self, PyObject *noargs) {
+    if (our_apid)
+        return PyLong_FromUnsignedLongLong(our_apid);
+    else
+        Py_RETURN_NONE;
+}
+
+static PyObject *
+alpsinfo_accel(PyObject *self, PyObject *noargs) {
+    if (our_apid) {
+        switch (cmd_details[0].accelType) {
+            case accel_arch_gpu:
+                return MAKE_STRING("GPU");
+            case accel_arch_knc:
+		return MAKE_STRING("KNC");
+            case accel_arch_none:
+            default:
+		return MAKE_STRING("None");
+        }
+    } else {
+        Py_RETURN_NONE;
+    }
+}
+
+#define MAKE_FN_NAME(x) alpsinfo_ ## x
+#define ALPS_PROPERTY(prop) \
+static PyObject * \
+MAKE_FN_NAME(prop) (PyObject *self, PyObject *noargs) { \
+    if (our_apid) \
+        return PyLong_FromLong(cmd_details[0].prop); \
+    else \
+        return PyLong_FromLong(0); \
+} 
+
+ALPS_PROPERTY(width)
+ALPS_PROPERTY(depth)
+ALPS_PROPERTY(fixedPerNode)
+ALPS_PROPERTY(nodeCnt)
+ALPS_PROPERTY(cpusPerCU)
+ALPS_PROPERTY(pesPerSeg)
+ALPS_PROPERTY(nodeSegCnt)
+ALPS_PROPERTY(segBits)
+
+static PyObject *
+alpsinfo_createinfo(void) {
     if (our_apid == 0)
         Py_RETURN_NONE;
 
-    PyObject *d = PyDict_New();
+    PyObject *alps_info = PyDict_New();
 
     PyObject *apid_key = MAKE_STRING("apid");
     PyObject *apid = PyLong_FromUnsignedLongLong(our_apid);
-    PyDict_SetItem(d, apid_key, apid);
+    PyDict_SetItem(alps_info, apid_key, apid);
     Py_DECREF(apid_key);
     Py_DECREF(apid);
 
-    int ret = alps_get_appinfo_ver3_err(our_apid, &appinfo, &cmd_details, &placement_details, &err_msg, &err);
 
     PyObject *cmds_key = MAKE_STRING("cmds");
     PyObject *width_key = MAKE_STRING("width");
@@ -137,17 +180,42 @@ alpsinfo_info(PyObject *self, PyObject *noargs) {
     Py_DECREF(accel_gpu);
     Py_DECREF(accel_knc);
 
-    PyDict_SetItem(d, cmds_key, cmds);
+    PyDict_SetItem(alps_info, cmds_key, cmds);
     Py_DECREF(cmds_key);
     Py_DECREF(cmds);
 
-    return d;
+    Py_INCREF(alps_info);
+    return alps_info;
 }
 
+static PyObject *
+alpsinfo_info(PyObject *self, PyObject *noargs) {
+    struct module_state *st = GETSTATE(self);
+    if (st->alps_info == NULL)
+        st->alps_info = alpsinfo_createinfo();
+    else
+        Py_INCREF(st->alps_info);
+    return st->alps_info;
+}
+//ALPS_PROPERTY(nodeCnt)
+//ALPS_PROPERTY(cpusPerCU)
+//ALPS_PROPERTY(pesPerSeg)
+//ALPS_PROPERTY(nodeSegCnt)
+//ALPS_PROPERTY(segBits)
 
 static PyMethodDef
 alpsinfo_functions[] = {
     { "info", alpsinfo_info, METH_NOARGS, "ALPS info method" },
+    { "apid", alpsinfo_apid, METH_NOARGS, "ALPS apid" },
+    { "width", alpsinfo_width, METH_NOARGS, "ALPS width (-n) for the first command" },
+    { "depth", alpsinfo_depth, METH_NOARGS, "ALPS depth (-d) for the first command" },
+    { "fixedPerNode", alpsinfo_fixedPerNode, METH_NOARGS, "ALPS pes_per_node (-N) for the first command"},
+    { "cpusPerCU", alpsinfo_cpusPerCU, METH_NOARGS, "ALPS cpus_per_cu (-j) for the first command" },
+    { "pesPerSeg", alpsinfo_pesPerSeg, METH_NOARGS, "ALPS pes_per_numa_node (-S) for the first command" },
+    { "nodeSegCnt", alpsinfo_nodeSegCnt, METH_NOARGS, "ALPS numa_nodes_per_node (-sn) for the first command" },
+    { "segBits", alpsinfo_segBits, METH_NOARGS, "ALPS list_of_numa_node bits (-sl) for the first command" },
+    { "nodeCnt", alpsinfo_nodeCnt, METH_NOARGS, "The number of nodes used by the first command" },
+    { "accel", alpsinfo_accel, METH_NOARGS, "The requested accelerator type" },
     {NULL, NULL, 0, NULL}
 };
 
@@ -201,9 +269,16 @@ initalpsinfo(void) {
 
     struct module_state *st = GETSTATE(module);
     st->error = PyErr_NewException("alpsinfo.Error", NULL, NULL);
+    st->alps_info = NULL;
     if (st->error == NULL) {
         Py_DECREF(module);
         INITERROR;
+    }
+
+    our_apid = get_this_apid();
+    if (our_apid) {
+        printf("Our Apid: %d\n", our_apid);
+        alps_get_appinfo_ver3_err(our_apid, &appinfo, &cmd_details, &placement_details, &err_msg, &err);
     }
 
 #if PY_MAJOR_VERSION >= 3
