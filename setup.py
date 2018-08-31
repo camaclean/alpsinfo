@@ -58,9 +58,9 @@ def pkgconfig(*packages, **kw):
             config.setdefault(distutils_key, []).extend([i[n:] for i in items])
     return config
 
+sources = ['alpsinfo.c']
 alpsinfo = Extension('alpsinfo',
-                     **pkgconfig('cray-alps', 'cray-alpsutil', config={'extra_compile_args':['--std=gnu99',]}),
-                     sources = ['alpsinfo.c'])
+                     **pkgconfig('cray-alps', 'cray-alpsutil', config={'extra_compile_args':['--std=gnu99'],'sources': sources}))
 
 setup (name = 'AlpsInfo',
        version = '1.0',
