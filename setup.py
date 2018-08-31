@@ -59,7 +59,7 @@ def pkgconfig(*packages, **kw):
     return config
 
 alpsinfo = Extension('alpsinfo',
-                     **pkgconfig('cray-alps', config={'extra_compile_args':['--std=c99']}),
+                     **pkgconfig('cray-alps', 'cray-alpsutil', config={'extra_compile_args':['--std=gnu99',]}),
                      sources = ['alpsinfo.c'])
 
 setup (name = 'AlpsInfo',

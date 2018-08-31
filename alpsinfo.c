@@ -2,6 +2,9 @@
 
 #include <stdlib.h>
 #include <alps/apInfo.h>
+#include <alps/alps_toolAssist.h>
+#include <alps/libalpsutil.h>
+#include <stdio.h>
 
 struct module_state {
     PyObject *alps_info;
@@ -39,10 +42,10 @@ extern int         alps_get_appinfo_ver3_err(uint64_t apid, appInfo_t *appinfo,
 
 
 static appInfo_t appinfo;
-static cmdDetail_t *cmd_details;
-static placeNodeList_ver3_t *placement_details;
+static cmdDetail_t *cmd_details = 0;
+static placeNodeList_ver3_t *placement_details = 0;
 static uint64_t our_apid = 0;
-static char *err_msg;
+static char *err_msg = 0;
 static int err;
 
 static PyObject *
@@ -80,14 +83,39 @@ MAKE_FN_NAME(prop) (PyObject *self, PyObject *noargs) { \
         return PyLong_FromLong(0); \
 } 
 
-ALPS_PROPERTY(width)
 ALPS_PROPERTY(depth)
 ALPS_PROPERTY(fixedPerNode)
-ALPS_PROPERTY(nodeCnt)
 ALPS_PROPERTY(cpusPerCU)
 ALPS_PROPERTY(pesPerSeg)
 ALPS_PROPERTY(nodeSegCnt)
 ALPS_PROPERTY(segBits)
+
+static PyObject *alpsinfo_width(PyObject *self, PyObject *noargs) {
+    if (our_apid)
+        return PyLong_FromLong(cmd_details[0].width);
+    else {
+        const char *env = getenv("PBS_NP");
+        if (env)
+            return PyLong_FromLong(strtoull(env,NULL,10));
+        else
+            Py_RETURN_NONE;
+    }
+}
+
+static PyObject *alpsinfo_nodeCnt(PyObject *self, PyObject *noargs) {
+    if (our_apid)
+        return PyLong_FromLong(cmd_details[0].nodeCnt);
+    else {
+        const char *env = getenv("PBS_NUM_NODES");
+        if (env)
+            return PyLong_FromLong(strtoull(env,NULL,10));
+        else
+            Py_RETURN_NONE;
+    }
+}
+
+static PyObject *alpsinfo_np(PyObject *self, PyObject *noargs) {
+}
 
 static PyObject *
 alpsinfo_createinfo(void) {
@@ -197,11 +225,176 @@ alpsinfo_info(PyObject *self, PyObject *noargs) {
         Py_INCREF(st->alps_info);
     return st->alps_info;
 }
-//ALPS_PROPERTY(nodeCnt)
-//ALPS_PROPERTY(cpusPerCU)
-//ALPS_PROPERTY(pesPerSeg)
-//ALPS_PROPERTY(nodeSegCnt)
-//ALPS_PROPERTY(segBits)
+
+static PyObject *
+alpsinfo_numericmomnid(PyObject *self, PyObject *noargs) {
+    alpsAppLayout_t appLayout;
+    memset(&appLayout,0,sizeof(alpsAppLayout_t));
+    alps_get_placement_info(our_apid, &appLayout, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+    if (appLayout.controlNid == 0) Py_RETURN_NONE;
+    return PyLong_FromLong(appLayout.controlNid);
+}
+    
+static PyObject *
+alpsinfo_momnid(PyObject *self, PyObject *noargs) {
+    alpsAppLayout_t appLayout;
+    memset(&appLayout,0,sizeof(alpsAppLayout_t));
+    alps_get_placement_info(our_apid, &appLayout, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+    if (appLayout.controlNid == 0) Py_RETURN_NONE;
+    char buffer[9];
+    snprintf(buffer, 9, "nid%05d", appLayout.controlNid);
+    return MAKE_STRING(buffer);
+}
+
+static PyObject *
+alpsinfo_numericnidlist(PyObject *self, PyObject *noargs) {
+    alpsAppLayout_t appLayout;
+    memset(&appLayout,0,sizeof(alpsAppLayout_t));
+    int *placementList = (int*) 1; //A null would prevent this value from being filled
+    int last;
+
+    alps_get_placement_info(our_apid, &appLayout, &placementList, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+    if (appLayout.controlNid != 0) {
+        PyObject *l = PyList_New(0);
+        for(int i = 0; i < appLayout.numPes; ++i) {
+            if (placementList[i] == last) continue;
+            last = placementList[i];
+            PyObject *nid = PyLong_FromLong(placementList[i]);
+            PyList_Append(l, nid);
+            Py_DECREF(nid);
+        }
+        free(placementList);
+        return l;
+    } else {
+        free(placementList);
+        const char *nodefilename = getenv("PBS_NODEFILE");
+        if (!nodefilename) Py_RETURN_NONE;
+        FILE *nodefile = fopen(nodefilename, "r");
+        if (!nodefile) Py_RETURN_NONE;
+        int node;
+        PyObject *l = PyList_New(0);
+        while (fscanf(nodefile, "%d\n", &node) == 1) {
+            if (node == last) continue;
+            last = node;
+            PyObject *nid = PyLong_FromLong(node);
+            PyList_Append(l, nid);
+            Py_DECREF(nid);
+        }
+        return l;
+    }
+}
+
+static PyObject *
+alpsinfo_nidlist(PyObject *self, PyObject *noargs) {
+    alpsAppLayout_t appLayout;
+    memset(&appLayout,0,sizeof(alpsAppLayout_t));
+    int *placementList = (int*) 1; //A null would prevent this value from being filled
+    int last;
+
+    alps_get_placement_info(our_apid, &appLayout, &placementList, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+    if (appLayout.controlNid != 0) {
+        PyObject *l = PyList_New(0);
+        for(int i = 0; i < appLayout.numPes; ++i) {
+            if (placementList[i] == last) continue;
+            last = placementList[i];
+            char buffer[9];
+            snprintf(buffer, 9, "nid%05d", placementList[i]);
+            PyObject *nid = MAKE_STRING(buffer);
+            PyList_Append(l, nid);
+            Py_DECREF(nid);
+        }
+        free(placementList);
+        return l;
+    } else {
+        free(placementList);
+        const char *nodefilename = getenv("PBS_NODEFILE");
+        if (!nodefilename) Py_RETURN_NONE;
+        FILE *nodefile = fopen(nodefilename, "r");
+        if (!nodefile) Py_RETURN_NONE;
+        int node;
+        PyObject *l = PyList_New(0);
+        while (fscanf(nodefile, "%d\n", &node) == 1) {
+            if (node == last) continue;
+            last = node;
+            char buffer[9];
+            snprintf(buffer, 9, "nid%05d", node);
+            PyObject *nid = MAKE_STRING(buffer);
+            PyList_Append(l, nid);
+            Py_DECREF(nid);
+        }
+        return l;
+    }
+}
+
+static PyObject *
+alpsinfo_numericpenidlist(PyObject *self, PyObject *noargs) {
+    alpsAppLayout_t appLayout;
+    memset(&appLayout,0,sizeof(alpsAppLayout_t));
+    int *placementList = (int*) 1; //A null would prevent this value from being filled
+
+    alps_get_placement_info(our_apid, &appLayout, &placementList, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+    if (appLayout.controlNid != 0) {
+        PyObject *l = PyList_New(0);
+        for(int i = 0; i < appLayout.numPes; ++i) {
+            PyObject *nid = PyLong_FromLong(placementList[i]);
+            PyList_Append(l, nid);
+            Py_DECREF(nid);
+        }
+        free(placementList);
+        return l;
+    } else {
+        free(placementList);
+        const char *nodefilename = getenv("PBS_NODEFILE");
+        if (!nodefilename) Py_RETURN_NONE;
+        FILE *nodefile = fopen(nodefilename, "r");
+        if (!nodefile) Py_RETURN_NONE;
+        int node;
+        PyObject *l = PyList_New(0);
+        while (fscanf(nodefile, "%d\n", &node) == 1) {
+            PyObject *nid = PyLong_FromLong(node);
+            PyList_Append(l, nid);
+            Py_DECREF(nid);
+        }
+        return l;
+    }
+}
+
+static PyObject *
+alpsinfo_penidlist(PyObject *self, PyObject *noargs) {
+    alpsAppLayout_t appLayout;
+    memset(&appLayout,0,sizeof(alpsAppLayout_t));
+    int *placementList = (int*) 1; //A null would prevent this value from being filled
+
+    alps_get_placement_info(our_apid, &appLayout, &placementList, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+    if (appLayout.controlNid != 0) {
+        PyObject *l = PyList_New(0);
+        for(int i = 0; i < appLayout.numPes; ++i) {
+            char buffer[9];
+            snprintf(buffer, 9, "nid%05d", placementList[i]);
+            PyObject *nid = MAKE_STRING(buffer);
+            PyList_Append(l, nid);
+            Py_DECREF(nid);
+        }
+        free(placementList);
+        return l;
+    } else {
+        free(placementList);
+        const char *nodefilename = getenv("PBS_NODEFILE");
+        if (!nodefilename) Py_RETURN_NONE;
+        FILE *nodefile = fopen(nodefilename, "r");
+        if (!nodefile) Py_RETURN_NONE;
+        int node;
+        PyObject *l = PyList_New(0);
+        while (fscanf(nodefile, "%d\n", &node) == 1) {
+            char buffer[9];
+            snprintf(buffer, 9, "nid%05d", node);
+            PyObject *nid = MAKE_STRING(buffer);
+            PyList_Append(l, nid);
+            Py_DECREF(nid);
+        }
+        return l;
+    }
+}
 
 static PyMethodDef
 alpsinfo_functions[] = {
@@ -216,6 +409,12 @@ alpsinfo_functions[] = {
     { "segBits", alpsinfo_segBits, METH_NOARGS, "ALPS list_of_numa_node bits (-sl) for the first command" },
     { "nodeCnt", alpsinfo_nodeCnt, METH_NOARGS, "The number of nodes used by the first command" },
     { "accel", alpsinfo_accel, METH_NOARGS, "The requested accelerator type" },
+    { "numericnidlist", alpsinfo_numericnidlist, METH_NOARGS, "Get the integer node ids (across all MPMDs)"},
+    { "nidlist", alpsinfo_nidlist, METH_NOARGS, "Get the node hostnames (across all MPMDs)"},
+    { "numericpenidlist", alpsinfo_numericpenidlist, METH_NOARGS, "Get the integer node ids (across all MPMDs) (PE map)"},
+    { "penidlist", alpsinfo_penidlist, METH_NOARGS, "Get the node hostnames (across all MPMDs) (PE map)"},
+    { "numericmomnid", alpsinfo_numericmomnid, METH_NOARGS, "Get the integer nid of the MOM node"},
+    { "momnid", alpsinfo_momnid, METH_NOARGS, "Get the hostname of the MOM node"},
     {NULL, NULL, 0, NULL}
 };
 
@@ -235,6 +434,14 @@ static int alpsinfo_clear(PyObject *m) {
     return 0;
 }
 
+static void alpsinfo_free(void *p) {
+    free(cmd_details);
+    free(placement_details);
+
+    cmd_details = NULL;
+    placement_details = NULL;
+}
+
 static struct PyModuleDef alpsinfo_module = {
     PyModuleDef_HEAD_INIT,
     "alpsinfo",   /* name of module */
@@ -245,7 +452,7 @@ static struct PyModuleDef alpsinfo_module = {
     NULL,
     alpsinfo_traverse,
     alpsinfo_clear,
-    NULL
+    alpsinfo_free
 };
 
 #define INITERROR return NULL
@@ -277,7 +484,6 @@ initalpsinfo(void) {
 
     our_apid = get_this_apid();
     if (our_apid) {
-        printf("Our Apid: %d\n", our_apid);
         alps_get_appinfo_ver3_err(our_apid, &appinfo, &cmd_details, &placement_details, &err_msg, &err);
     }
 
